@@ -10,7 +10,7 @@ from utils.array_utils import *
 from scipy.spatial.transform import Rotation as R
 
 def rodrigues(r: np.ndarray) -> np.ndarray:
-    if r.size == 3: return R.from_rotvec(r.squeeze()).as_dcm()
+    if r.size == 3: return R.from_rotvec(r.squeeze()).as_matrix()
     else: return R.from_dcm(r).as_rotvec().reshape((3, 1))
 
 def getRot(transform: np.ndarray) -> np.ndarray:
@@ -64,4 +64,3 @@ def mergedTransform(t2: np.ndarray, t1: np.ndarray): # T2 * T1
         return np.concatenate((rot, tr), axis=0)
     else:
         return np.concatenate((R, tr), axis=1)
-    

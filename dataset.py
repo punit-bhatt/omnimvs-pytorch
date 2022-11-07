@@ -3,6 +3,7 @@
 # Author: Changhee Won (changhee.1.won@gmail.com)
 #
 #
+import cv2
 import os
 import os.path as opts
 import sys
@@ -21,7 +22,7 @@ from utils.ocam import *
 from utils.image import *
 import utils.dbhelper
 
-def getEquirectCoordinate(pts: np.ndarray, equirect_size: (int, int), 
+def getEquirectCoordinate(pts: np.ndarray, equirect_size: (int, int),
                          phi_deg: float, phi2_deg = -1.0):
     h, w = equirect_size
     d = sqrt((pts**2).sum(0)).reshape((1, -1))
@@ -54,7 +55,7 @@ def makeSphericalRays(equirect_size: (int, int),
         ys = (ys - h_2) / h_2 * med2 - med
     else:
         ys = (ys - h_2) / h_2 * np.deg2rad(phi_deg)
-    
+
     X = -np.cos(ys) * np.cos(xs)
     Y = np.sin(ys) # sphere
     # Y = np.sin(ys) / np.cos(ys) # cylinder
@@ -74,7 +75,7 @@ class Dataset(torch.utils.data.Dataset):
         opts = Edict()
         opts.img_fmt = 'cam%d/%04d.png' # [cam_idx, fidx]
         opts.lut_fmt = 'lt_(%d,%d,%d).hwd' # lookup table fmt [equi_h, w, d]
-        opts.gt_depth_fmt = 'omnidepth_gt_%d/%05d.tiff' # [equi_w, fidx]
+        opts.gt_depth_fmt = 'rig/%05d.png' # [equi_w, fidx]
         opts.equirect_size, opts.num_invdepth = [160, 640], 192
         opts.phi_deg, opts.phi2_deg = 45, -1.0
         opts.min_depth = 0.5 # meter scale
@@ -85,10 +86,10 @@ class Dataset(torch.utils.data.Dataset):
         opts.start, opts.step, opts.end = 1, 1, 1000 # frame
         opts.train_idx, opts.test_idx = [], []
         opts.gt_phi = 0.0
-        opts.dtype = 'nogt'
+        opts.dtype = 'gt'
         opts.use_rgb = False
 
-        # first update opts using pre-defined config 
+        # first update opts using pre-defined config
         # also load ocam parameters
         opts, self.ocams = utils.dbhelper.loadDBConfigs(
             self.dbname, self.db_path, opts)
@@ -112,17 +113,17 @@ class Dataset(torch.utils.data.Dataset):
         self.phi_deg, self.phi2_deg = opts.phi_deg, opts.phi2_deg
         self.num_invdepth = opts.num_invdepth
         self.read_input_image = opts.read_input_image
-        self.upsample_output = opts.upsample_output 
+        self.upsample_output = opts.upsample_output
         self.data_size = len(self.frame_idx)
         self.train_size = len(self.train_idx)
         self.test_size = len(self.test_idx)
         self.__initSweep(load_lut)
         self.train = train
     # end __init__
-        
+
     def __initSweep(self, load_lut=True):
         h, w = self.equirect_size
-        self.rays = makeSphericalRays(self.equirect_size, 
+        self.rays = makeSphericalRays(self.equirect_size,
             self.phi_deg, self.phi2_deg)
         self.min_invdepth = 1.0 / self.max_depth
         self.max_invdepth = 1.0 / self.min_depth
@@ -130,7 +131,7 @@ class Dataset(torch.utils.data.Dataset):
             (self.max_invdepth - self.min_invdepth) / (self.num_invdepth - 1.0)
         self.invdepths = np.arange(
             self.min_invdepth, self.max_invdepth + self.sample_step_invdepth,
-            self.sample_step_invdepth, dtype=np.float64)        
+            self.sample_step_invdepth, dtype=np.float64)
         if load_lut: self.__loadOrBuildLookupTable()
     # end __initSweep
 
@@ -175,7 +176,7 @@ class Dataset(torch.utils.data.Dataset):
             grids = [torch.zeros((num_invdepth_2, h, w, 2),
                         requires_grad=False).cuda() for _ in range(4)]
         else:
-            grids = [np.zeros((num_invdepth_2, h, w, 2), dtype=np.float32) 
+            grids = [np.zeros((num_invdepth_2, h, w, 2), dtype=np.float32)
                 for _ in range(4)]
         for d in range(num_invdepth_2):
             depth = 1.0 / self.invdepths[2 * d]
@@ -201,18 +202,18 @@ class Dataset(torch.utils.data.Dataset):
         for i in range(4):
             file_path = osp.join(self.db_path, self.img_fmt % (i + 1, fidx))
             I = readImage(file_path)
-            if not use_rgb and len(I.shape) == 3 and I.shape[2] == 3: 
+            if not use_rgb and len(I.shape) == 3 and I.shape[2] == 3:
                 I = rgb2gray(I, channel_wise_mean=True)
             if out_raw_imgs: raw_imgs.append(I)
             I = normalizeImage(I, self.ocams[i].invalid_mask)
-            if len(I.shape) == 2: 
+            if len(I.shape) == 2:
                 I = np.expand_dims(I, axis=0) # make 1 x H x W
                 if use_rgb: I = np.tile(I, (3, 1, 1)) # make 3 x H x W
             else: I = np.transpose(I, (2, 0, 1)) # make C x H x W
             imgs.append(I)
         if out_raw_imgs: return imgs, raw_imgs
         else: return imgs
-    
+
     def readInvdepth(self, path: str) -> np.ndarray:
         _, ext = osp.splitext(path)
         if ext == '.png':
@@ -224,7 +225,7 @@ class Dataset(torch.utils.data.Dataset):
             return readImageFloat(path)
         else:
             return np.fromfile(path, dtype=np.float32)
-    
+
     def writeInvdepth(self, invdepth: np.ndarray, path: str) -> None:
         _, ext = osp.splitext(path)
         if ext == '.png':
@@ -245,7 +246,7 @@ class Dataset(torch.utils.data.Dataset):
             return readImageFloat(path)
         else:
             return np.fromfile(path, dtype=np.float32)
-    
+
     def writeEntropy(self, entropy: np.ndarray, path: str) -> None:
         _, ext = osp.splitext(path)
         if ext == '.tif' or ext == '.tiff':
@@ -254,25 +255,36 @@ class Dataset(torch.utils.data.Dataset):
             writeImageFloat(entropy.astype(np.float32), path, thumbnail)
         else:
             entropy.astype(np.float32).tofile(path)
-    
+
     def indexToInvdepth(self, idx, start_index = 0):
         return self.min_invdepth + \
             (idx - start_index) * self.sample_step_invdepth
-    
+
     def invdepthToIndex(self, inv_depth, start_index = 0):
         return (inv_depth - self.min_invdepth) / \
             self.sample_step_invdepth + start_index
-    
+
     def loadGTInvdepthIndex(self, fidx, remove_gt_noise=True,
                             morph_win_size=5):
         h, w = self.equirect_size
         gt_depth_file = osp.join(self.db_path, self.gt_depth_fmt % (w, fidx))
-        gt = self.readInvdepth(gt_depth_file)
-        gt_h = gt.shape[0]
+        depth = torch.from_numpy(
+            np.squeeze(
+                cv2.imread(
+                    gt_depth_file,
+                    cv2.IMREAD_UNCHANGED).view('<f4'),
+                axis=-1))
+        gt = 1. / depth
+        gt_h, gt_w = gt.shape[0], gt.shape[1]
         # crop height
         if h < gt_h:
             sh = int(round((gt_h - h) / 2.0))
             gt = gt[sh:sh + h, :]
+
+        # crop width
+        if w < gt_w:
+            sw = int(round((gt_w - w) / 2.0))
+            gt = gt[:, sw:sw + w]
 
         gt_idx = self.invdepthToIndex(gt)
         if not remove_gt_noise:
@@ -282,7 +294,7 @@ class Dataset(torch.utils.data.Dataset):
             (morph_win_size, morph_win_size), dtype=np.uint8)
         finite_depth = gt >= 1e-3 # <= 1000 m
         closed_depth = scipy.ndimage.binary_closing(
-            finite_depth, morph_filter) 
+            finite_depth, morph_filter)
         infinite_depth = np.logical_not(finite_depth)
         infinite_hole = np.logical_and(infinite_depth, closed_depth)
         gt_idx[infinite_hole] = -1
@@ -298,7 +310,7 @@ class Dataset(torch.utils.data.Dataset):
             imgs, raw_imgs = self.loadImages(fidx, True, use_rgb=self.use_rgb)
         gt, valid = [], []
         if self.dtype == 'gt':
-            gt = self.loadGTInvdepthIndex(fidx, 
+            gt = self.loadGTInvdepthIndex(fidx,
                 opts.remove_gt_noise, opts.morph_win_size)
             valid = np.logical_and(
                 gt >= 0, gt <= self.num_invdepth).astype(np.bool)
@@ -306,7 +318,7 @@ class Dataset(torch.utils.data.Dataset):
 
     def loadTrainSample(self, i: int, read_input_image=True, varargin=None):
         return self.loadSample(self.train_idx[i], read_input_image, varargin)
-        
+
     def loadTestSample(self, i: int, read_input_image=True, varargin=None):
         return self.loadSample(self.test_idx[i], read_input_image, varargin)
 
@@ -330,8 +342,8 @@ class Dataset(torch.utils.data.Dataset):
             valid_count[valid] += 1
         pano = np.round(pano_sum / valid_count).astype(np.uint8)
         return pano
-    
-    def makeVisImage(self, imgs, invdepth: np.ndarray, 
+
+    def makeVisImage(self, imgs, invdepth: np.ndarray,
                      entropy=None, gt=None, transform=None) -> np.ndarray:
         for i in range(4):
             imgs[i] = toNumpy(imgs[i])
@@ -396,88 +408,88 @@ class Dataset(torch.utils.data.Dataset):
         rms = np.sqrt(np.nanmean(error**2))
         return e1, e3, e5, mae, rms, completeness
 
-class MultiDataset(Dataset):
-    # !! share all opts among datasets
-    def __init__(self, dbnames: list, db_opts=None, load_lut=True, train=True,
-                 db_root = '../data'):
-        super().__init__(dbnames[0], db_opts, load_lut, train, db_root)
-        self.dbnames = dbnames
-        self.datasets = [Dataset(dbname, db_opts, False, train, db_root) \
-                for dbname in dbnames[1:]]
-        self.num_datasets = len(self.datasets) + 1
-        self.frame_idx_offsets = np.zeros((self.num_datasets))
-        self.train_idx_offsets = np.zeros((self.num_datasets))
-        self.test_idx_offsets = np.zeros((self.num_datasets))
-        for i, db in enumerate(self.datasets):
-            self.frame_idx_offsets[i + 1] = self.data_size
-            self.train_idx_offsets[i + 1] = self.train_size
-            self.test_idx_offsets[i + 1] = self.test_size
-            self.frame_idx += db.frame_idx
-            self.train_idx += db.train_idx
-            self.test_idx += db.test_idx
-            self.train_size += db.train_size
-            self.test_size += db.test_size
-            self.data_size += db.data_size
-        LOG_INFO('Multiple datasets are initialized (they share configs)')
-    
-    def __findDataIndex(self, sample_idx: int, offsets: list) -> (int, int):
-        for i in range(self.num_datasets - 1):
-            if sample_idx >= offsets[i] and sample_idx < offsets[i+1]:
-                return i
-        return self.num_datasets - 1 
+# class MultiDataset(Dataset):
+#     # !! share all opts among datasets
+#     def __init__(self, dbnames: list, db_opts=None, load_lut=True, train=True,
+#                  db_root = '../data'):
+#         super().__init__(dbnames[0], db_opts, load_lut, train, db_root)
+#         self.dbnames = dbnames
+#         self.datasets = [Dataset(dbname, db_opts, False, train, db_root) \
+#                 for dbname in dbnames[1:]]
+#         self.num_datasets = len(self.datasets) + 1
+#         self.frame_idx_offsets = np.zeros((self.num_datasets))
+#         self.train_idx_offsets = np.zeros((self.num_datasets))
+#         self.test_idx_offsets = np.zeros((self.num_datasets))
+#         for i, db in enumerate(self.datasets):
+#             self.frame_idx_offsets[i + 1] = self.data_size
+#             self.train_idx_offsets[i + 1] = self.train_size
+#             self.test_idx_offsets[i + 1] = self.test_size
+#             self.frame_idx += db.frame_idx
+#             self.train_idx += db.train_idx
+#             self.test_idx += db.test_idx
+#             self.train_size += db.train_size
+#             self.test_size += db.test_size
+#             self.data_size += db.data_size
+#         LOG_INFO('Multiple datasets are initialized (they share configs)')
 
-    def __len__(self) -> int:
-        if self.train:
-            return len(self.train_idx)
-        else:
-            return len(self.test_idx)
+#     def __findDataIndex(self, sample_idx: int, offsets: list) -> (int, int):
+#         for i in range(self.num_datasets - 1):
+#             if sample_idx >= offsets[i] and sample_idx < offsets[i+1]:
+#                 return i
+#         return self.num_datasets - 1
 
-    def __getitem__(self, i: int):
-        if self.train: return self.loadTrainSample(i)
-        else: return self.loadTestSample(i, self.read_input_image)
+#     def __len__(self) -> int:
+#         if self.train:
+#             return len(self.train_idx)
+#         else:
+#             return len(self.test_idx)
 
-    def loadSample(self, i: int, read_input_image=True, varargin=None):
-        didx = self.__findDataIndex(i, self.frame_idx_offsets)
-        sample_idx = self.frame_idx[i]
-        if didx == 0:
-            return super().loadSample(sample_idx, read_input_image, varargin)
-        else:
-            return self.datasets[didx - 1].loadSample(
-                sample_idx, read_input_image, varargin)
+#     def __getitem__(self, i: int):
+#         if self.train: return self.loadTrainSample(i)
+#         else: return self.loadTestSample(i, self.read_input_image)
 
-
-    def loadTrainSample(self, i: int, read_input_image=True, varargin=None):
-        didx = self.__findDataIndex(i, self.train_idx_offsets)
-        sample_idx = self.train_idx[i]
-        if didx == 0:
-            return super().loadSample(
-                sample_idx, read_input_image, varargin)
-        else:
-            return self.datasets[didx - 1].loadSample(
-                sample_idx, read_input_image, varargin)
-        
-    def loadTestSample(self, i: int, read_input_image=True, varargin=None):
-        didx = self.__findDataIndex(i, self.test_idx_offsets)
-        sample_idx = self.test_idx[i]
-        if didx == 0:
-            return super().loadSample(
-                sample_idx, read_input_image, varargin)
-        return self.datasets[didx - 1].loadSample(
-            sample_idx, read_input_image, varargin)
-
-    def splitDataset(self, dbname: str) -> Dataset:
-        didx = self.dbnames.index(dbname.lower())
-        if didx == 0:
-            dataset = self
-            dataset.__class__ = Dataset
-            return dataset
-        else:
-            return self.datasets[didx - 1]
+#     def loadSample(self, i: int, read_input_image=True, varargin=None):
+#         didx = self.__findDataIndex(i, self.frame_idx_offsets)
+#         sample_idx = self.frame_idx[i]
+#         if didx == 0:
+#             return super().loadSample(sample_idx, read_input_image, varargin)
+#         else:
+#             return self.datasets[didx - 1].loadSample(
+#                 sample_idx, read_input_image, varargin)
 
 
+#     def loadTrainSample(self, i: int, read_input_image=True, varargin=None):
+#         didx = self.__findDataIndex(i, self.train_idx_offsets)
+#         sample_idx = self.train_idx[i]
+#         if didx == 0:
+#             return super().loadSample(
+#                 sample_idx, read_input_image, varargin)
+#         else:
+#             return self.datasets[didx - 1].loadSample(
+#                 sample_idx, read_input_image, varargin)
 
-        
-        
+#     def loadTestSample(self, i: int, read_input_image=True, varargin=None):
+#         didx = self.__findDataIndex(i, self.test_idx_offsets)
+#         sample_idx = self.test_idx[i]
+#         if didx == 0:
+#             return super().loadSample(
+#                 sample_idx, read_input_image, varargin)
+#         return self.datasets[didx - 1].loadSample(
+#             sample_idx, read_input_image, varargin)
+
+#     def splitDataset(self, dbname: str) -> Dataset:
+#         didx = self.dbnames.index(dbname.lower())
+#         if didx == 0:
+#             dataset = self
+#             dataset.__class__ = Dataset
+#             return dataset
+#         else:
+#             return self.datasets[didx - 1]
+
+
+
+
+
 
 
 
